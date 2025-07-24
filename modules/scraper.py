@@ -1,70 +1,93 @@
 import asyncio
 import json
-from pyppeteer import launch
+from playwright.async_api import async_playwright
+from config.logger import logger
+cookieIndex = 0
 
-async def crawler(problem: list):
-    browser = None
+# ---- 加载 cookies（一次性） ----
+with open('data/cookies.json', 'r', encoding='utf-8') as f:
+    ALL_COOKIES = json.load(f)
+    for cookie in ALL_COOKIES:
+        cookie["value"] = cookie["value"].replace("\t", "").replace("\n", "")
+
+
+async def crawler(problem_list,click):
+    global cookieIndex
     responses = []
 
-    async def intercept_response(response):
-        try:
-            url = response.url
-            if "conversation" in url and response.request.method == 'POST':
-                text = await response.text()
-                responses.append({
-                    "url": url,
-                    "body": text
-                })
-        except Exception as e:
-            print(f"响应处理错误: {e}")
+    async with async_playwright() as p:
 
-    try:
-        # args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled',
-        #    代理地址→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→  '--proxy-server=http://xxxx:8080']
-        browser = await launch(
+
+        browser = await p.chromium.launch(
             headless=False,
-            executablePath='/data/opt/google/chrome/chrome',   #本地浏览器路径
-            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+            executable_path="/data/opt/google/chrome/chrome",
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+            ]
+        #设置代理
+        # args = [
+        #     "--no-sandbox",
+        #     "--disable-setuid-sandbox",
+        #     "--disable-blink-features=AutomationControlled",
+        #     "--proxy-server=https://131.0.0.1:7890"  # <-- 通过 args 设置代理
+        # ]
         )
 
-        page = await browser.newPage()
-        await page.setViewport({'width': 1280, 'height': 743})
-        page.on('response', lambda resp: asyncio.ensure_future(intercept_response(resp)))
-
-        await page.evaluateOnNewDocument(
-            'Object.defineProperty(navigator, "webdriver", {get: () => undefined})')
-        # windows  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        await page.setUserAgent(
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 743},
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
         )
 
-        await page.goto('https://chatgpt.com/', {'waitUntil': 'networkidle2'})
+        # 设置 Cookie
+        cookie = ALL_COOKIES[cookieIndex % len(ALL_COOKIES)]
+        cookieIndex += 1
+        logger.info(f"当前使用第 {cookieIndex} 个 Cookie")
+        await context.add_cookies([cookie])
 
-        with open('data/cookies.json', 'r', encoding='utf-8') as f:
-            cookies = json.load(f)
-            for cookie in cookies:
-                cookie["value"] = cookie["value"].replace("\t", "").replace("\n", "")
-            await page.setCookie(*cookies)
+        page = await context.new_page()
 
-        await page.goto('https://chatgpt.com/', {'waitUntil': 'networkidle2'})
+        # 拦截响应
+        page.on("response", lambda response: asyncio.ensure_future(handle_response(response, responses)))
 
-        # with open('data/contentList', 'r', encoding='utf-8') as f:
-        #     lists = f.readlines()
+        # 访问 ChatGPT 网站
+        await page.goto("https://chatgpt.com", wait_until="networkidle")
 
-        for x in problem:
-            await asyncio.sleep(6)
-            await page.type('textarea', x)
-            await asyncio.sleep(8)
-            await page.keyboard.press('Enter')
+
+        if click:
+           try:
+               await page.get_by_role("button", name="工具").click(timeout=10000)
+               logger.info(f"工具按钮点击成功")
+           except Exception as e:
+               logger.info(f"工具按钮点击失败：",e)
+
+
+           # 点击“网页搜索”菜单项
+           try:
+               await page.get_by_text("网页搜索").click(timeout=10000)
+               logger.info("点击“网页搜索”菜单项成功")
+               await asyncio.sleep(3)
+           except Exception as e:
+               logger.info("网页搜索菜单点击失败",e)
+
+        # 输入问题并提交
+        for q in problem_list:
+            await page.type("textarea", q)
+            await asyncio.sleep(1)
+            await page.keyboard.press("Enter")
             await asyncio.sleep(25)
 
-        return responses  # 返回响应数据
+        await browser.close()
+        return responses
 
+
+# ---- 拦截 conversation 相关响应 ----
+async def handle_response(response, responses):
+    try:
+        url = response.url
+        if "conversation" in url and response.request.method == "POST":
+            body = await response.text()
+            responses.append({"url": url, "body": body})
     except Exception as e:
-        print(f"发生错误: {e}")
-        return []
-    finally:
-        if browser:
-            await browser.close()
-
-
+        logger.info("响应处理出错", e)

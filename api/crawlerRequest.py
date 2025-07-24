@@ -3,20 +3,24 @@ import json
 from modules.scraper import crawler
 from fastapi import APIRouter
 from pydantic import BaseModel
-
+from datetime import datetime
 class CrawlerRequest(BaseModel):
     problem: list
+    click:bool
 
 router = APIRouter()
 
 @router.post("/crawler")
 async def run_crawler(request: CrawlerRequest):
-    result = await crawler(request.problem)
+    from datetime import datetime
+
+    result = await crawler(request.problem,request.click)
     filtered = [item for item in result if item["url"] == "https://chatgpt.com/backend-api/f/conversation"]
-    data = {}
+
+    response_data = []
 
     for i, item in enumerate(filtered):
-        key = f"data_{i + 1}"
+        question_text = request.problem[i] if i < len(request.problem) else f"question_{i + 1}"
         body = item.get("body", "")
         lines = body.splitlines()
         parsed = []
@@ -40,8 +44,13 @@ async def run_crawler(request: CrawlerRequest):
                     "data": data_value
                 })
 
-        data[key] = parsed
+        response_data.append({
+            "question": question_text,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "answer": parsed,
+        })
 
-    return {"responses": data,"responses1":filtered}
+    return response_data
+
 
 
