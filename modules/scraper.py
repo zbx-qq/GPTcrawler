@@ -2,17 +2,19 @@ import asyncio
 import json
 from playwright.async_api import async_playwright
 from config.logger import logger
-cookieIndex = 0
-
-# ---- 加载 cookies（一次性） ----
-with open('data/cookies.json', 'r', encoding='utf-8') as f:
-    ALL_COOKIES = json.load(f)
-    for cookie in ALL_COOKIES:
-        cookie["value"] = cookie["value"].replace("\t", "").replace("\n", "")
 
 
-async def crawler(problem_list,click):
-    global cookieIndex
+# cookieIndex = 0
+#
+# # ---- 加载 cookies（一次性） ----
+# with open('data/cookies.json', 'r', encoding='utf-8') as f:
+#     ALL_COOKIES = json.load(f)
+#     for cookie in ALL_COOKIES:
+#         cookie["value"] = cookie["value"].replace("\t", "").replace("\n", "")
+
+
+async def crawler(problem_list,click,cookie):
+    # global cookieIndex
     responses = []
 
     async with async_playwright() as p:
@@ -41,10 +43,10 @@ async def crawler(problem_list,click):
         )
 
         # 设置 Cookie
-        cookie = ALL_COOKIES[cookieIndex % len(ALL_COOKIES)]
-        cookieIndex += 1
-        logger.info(f"当前使用第 {cookieIndex} 个 Cookie")
-        await context.add_cookies([cookie])
+        # cookie = ALL_COOKIES[cookieIndex % len(ALL_COOKIES)]
+        # cookieIndex += 1
+        # logger.info(f"当前使用第 {cookieIndex} 个 Cookie")
+        await context.add_cookies(cookie)
 
         page = await context.new_page()
 
@@ -53,7 +55,14 @@ async def crawler(problem_list,click):
 
         # 访问 ChatGPT 网站
         await page.goto("https://chatgpt.com", wait_until="networkidle")
+        await asyncio.sleep(6)
 
+        # 判断是否弹窗存在登录按钮
+        login_button = await page.query_selector('button:has-text("登录")')  # 也可以改成英文 "Log in" 看页面语言
+        if login_button:
+            logger.error("检测到登录按钮，说明未登录或cookie无效")
+            raise Exception("登录失败：cookie 无效或已过期")
+        logger.info("未检测到登录弹窗，视为登录成功")
 
         if click:
            try:
@@ -88,6 +97,11 @@ async def handle_response(response, responses):
         url = response.url
         if "conversation" in url and response.request.method == "POST":
             body = await response.text()
-            responses.append({"url": url, "body": body})
+            payload = response.request.post_data
+            responses.append({
+                "url": url,
+                "body": body,
+                "payload": payload
+            })
     except Exception as e:
-        logger.info("响应处理出错", e)
+        print("响应处理出错：", e)
